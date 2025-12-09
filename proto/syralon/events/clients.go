@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -19,7 +20,7 @@ func (t *txn) Commit(ctx context.Context) error {
 	return err
 }
 
-type EventProducer interface {
+type Writer interface {
 	Write(ctx context.Context, events ...*Event) error
 	WriteTx(ctx context.Context, events ...*Event) (Commiter, error)
 }
@@ -50,63 +51,102 @@ func (c *client) WriteTx(ctx context.Context, events ...*Event) (Commiter, error
 	return &txn{ids: resp.GetIds(), client: c.client}, nil
 }
 
-func NewEventProducer(ec EventServiceClient) EventProducer {
+func NewWriter(ec EventServiceClient) Writer {
 	return &client{client: ec}
 }
 
-type ProtoEventProducer struct {
-	topic    string
-	producer EventProducer
+type writer struct {
+	w         Writer
+	marshaler func(v any) ([]byte, error)
 }
 
-func NewProtoEventProducer(topic string, producer EventProducer) *ProtoEventProducer {
-	return &ProtoEventProducer{topic: topic, producer: producer}
+type EventWriter struct {
+	topic string
+
+	writer
 }
 
-func (e *ProtoEventProducer) build(ctx context.Context, data ...proto.Message) ([]*Event, error) {
-	return NewEventsFromProto(ctx, e.topic, data...)
+type EventWriteOption func(*EventWriter)
+
+func WithMarshaler(fn func(v any) ([]byte, error)) EventWriteOption {
+	return func(e *EventWriter) {
+		e.marshaler = fn
+	}
 }
 
-func (e *ProtoEventProducer) Write(ctx context.Context, data ...proto.Message) error {
-	events, err := NewEventsFromProto(ctx, e.topic, data...)
+func ProtoMarshal(v any) ([]byte, error) {
+	if m, ok := v.(proto.Message); ok {
+		return proto.Marshal(m)
+	}
+	return json.Marshal(v)
+}
+
+func WithProtoMarshaler() EventWriteOption {
+	return func(e *EventWriter) {
+		e.marshaler = ProtoMarshal
+	}
+}
+
+func NewEventWriter(topic string, w Writer, opts ...EventWriteOption) *EventWriter {
+	e := &EventWriter{topic: topic, writer: writer{w: w, marshaler: json.Marshal}}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
+}
+
+func (e *EventWriter) Topic() string { return e.topic }
+
+func (e *EventWriter) Write(ctx context.Context, evs ...any) error {
+	events, err := NewEvents(ctx, e.topic, e.marshaler, evs...)
 	if err != nil {
 		return err
 	}
-	return e.producer.Write(ctx, events...)
+	return e.w.Write(ctx, events...)
 }
 
-func (e *ProtoEventProducer) WriteTx(ctx context.Context, data ...proto.Message) (Commiter, error) {
-	events, err := NewEventsFromProto(ctx, e.topic, data...)
+func (e *EventWriter) WriteTx(ctx context.Context, evs ...any) (Commiter, error) {
+	events, err := NewEvents(ctx, e.topic, e.marshaler, evs...)
 	if err != nil {
 		return nil, err
 	}
-	return e.producer.WriteTx(ctx, events...)
+	return e.w.WriteTx(ctx, events...)
 }
 
-func (e *ProtoEventProducer) Topic() string { return e.topic }
-
-func (e *ProtoEventProducer) Mixing() *Mixing {
-	return &Mixing{producer: e.producer}
+func (e *EventWriter) Mixing() *Mixing {
+	return &Mixing{writer: e.writer}
 }
 
 type Mixing struct {
-	producer EventProducer
-	events   []*Event
+	writer
+
+	events []*Event
+	err    error
 }
 
-func (m *Mixing) Add(ctx context.Context, topic string, data ...proto.Message) error {
-	events, err := NewEventsFromProto(ctx, topic, data...)
+func (m *Mixing) Add(ctx context.Context, topic string, evs ...any) *Mixing {
+	if m.err != nil {
+		return m
+	}
+	events, err := NewEvents(ctx, topic, m.marshaler, evs...)
 	if err != nil {
-		return err
+		m.err = err
+		return m
 	}
 	m.events = append(m.events, events...)
-	return nil
+	return m
 }
 
 func (m *Mixing) Write(ctx context.Context) error {
-	return m.producer.Write(ctx, m.events...)
+	if m.err != nil {
+		return m.err
+	}
+	return m.w.Write(ctx, m.events...)
 }
 
 func (m *Mixing) WriteTx(ctx context.Context) (Commiter, error) {
-	return m.producer.WriteTx(ctx, m.events...)
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.w.WriteTx(ctx, m.events...)
 }
