@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"google.golang.org/protobuf/proto"
 )
 
 type Commiter interface {
@@ -51,4 +52,61 @@ func (c *client) WriteTx(ctx context.Context, events ...*Event) (Commiter, error
 
 func NewEventProducer(ec EventServiceClient) EventProducer {
 	return &client{client: ec}
+}
+
+type ProtoEventProducer struct {
+	topic    string
+	producer EventProducer
+}
+
+func NewProtoEventProducer(topic string, producer EventProducer) *ProtoEventProducer {
+	return &ProtoEventProducer{topic: topic, producer: producer}
+}
+
+func (e *ProtoEventProducer) build(ctx context.Context, data ...proto.Message) ([]*Event, error) {
+	return NewEventsFromProto(ctx, e.topic, data...)
+}
+
+func (e *ProtoEventProducer) Write(ctx context.Context, data ...proto.Message) error {
+	events, err := NewEventsFromProto(ctx, e.topic, data...)
+	if err != nil {
+		return err
+	}
+	return e.producer.Write(ctx, events...)
+}
+
+func (e *ProtoEventProducer) WriteTx(ctx context.Context, data ...proto.Message) (Commiter, error) {
+	events, err := NewEventsFromProto(ctx, e.topic, data...)
+	if err != nil {
+		return nil, err
+	}
+	return e.producer.WriteTx(ctx, events...)
+}
+
+func (e *ProtoEventProducer) Topic() string { return e.topic }
+
+func (e *ProtoEventProducer) Mixing() *Mixing {
+	return &Mixing{producer: e.producer}
+}
+
+type Mixing struct {
+	producer EventProducer
+	events   []*Event
+}
+
+func (m *Mixing) Add(ctx context.Context, topic string, data ...proto.Message) error {
+	events, err := NewEventsFromProto(ctx, topic, data...)
+	if err != nil {
+		return err
+	}
+	m.events = append(m.events, events...)
+	return nil
+}
+
+func (m *Mixing) Write(ctx context.Context) error {
+	return m.producer.Write(ctx, m.events...)
+}
+
+func (m *Mixing) WriteTx(ctx context.Context) (Commiter, error) {
+	return m.producer.WriteTx(ctx, m.events...)
 }

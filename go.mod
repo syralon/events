@@ -8,3 +8,5 @@ require (
 	entgo.io/ent v0.14.5
 	github.com/syralon/snowflake v0.0.0-20251126030518-38724ee4d165
 )
+
+require github.com/syralon/events/proto v0.0.0-20251209085120-28098b5fb7b8 // indirect
