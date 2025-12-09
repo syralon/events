@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package syralon.events;
+
+import "proto/syralon/events/event.proto";
+
+option go_package = "github.com/syralon/events/pkg/events;events";
+
+message WriteEventsRequest {
+  repeated Event events = 1;
+}
+
+message WriteEventsResponse {}
+
+message PrepareEventsRequest{
+  repeated Event events = 1;
+}
+
+message PrepareEventsResponse {
+  repeated int64 ids = 1;
+}
+
+message CommitEventsRequest {
+  repeated int64 ids = 1;
+}
+
+message CommitEventsResponse {}
+
+service EventService {
+  rpc Write(WriteEventsRequest)returns (WriteEventsResponse);
+  rpc Prepare(PrepareEventsRequest)returns (PrepareEventsResponse);
+  rpc Commit(CommitEventsRequest)returns (CommitEventsResponse);
+}

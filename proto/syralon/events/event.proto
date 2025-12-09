@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package syralon.events;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+
+option go_package = "github.com/syralon/events/pkg/events;events";
+
+message Event {
+  int64 id = 1;
+  string topic = 2;
+  map<string,string> metadata = 3;
+  bytes body = 4;
+  google.protobuf.Duration delay = 5;
+  google.protobuf.Timestamp timestamp = 6;
+}
